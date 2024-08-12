@@ -28,6 +28,10 @@ class Context(unittest.TestCase):
         self.assertEqual(self.context.eval("true || false"), True)
         self.assertEqual(self.context.eval("true && false"), False)
 
+    def test_eval_array(self):
+        self.assertEqual(self.context.eval("[]"), [])
+        self.assertEqual(self.context.eval("[1, 2.0, null, true, 'test']"), [1, 2.0, None, True, 'test'])
+
     def test_eval_null(self):
         self.assertIsNone(self.context.eval("null"))
 
@@ -51,17 +55,24 @@ class Context(unittest.TestCase):
         self.assertEqual(self.context.eval("special(2)"), 42)
 
     def test_get(self):
-        self.context.eval("x = 42; y = 'foo';")
-        self.assertEqual(self.context.get("x"), 42)
-        self.assertEqual(self.context.get("y"), "foo")
-        self.assertEqual(self.context.get("z"), None)
+        self.context.eval("a = 42; b = 'foo';")
+        self.assertEqual(self.context.get("a"), 42)
+        self.assertEqual(self.context.get("b"), "foo")
+        self.assertEqual(self.context.get("c"), None)
 
     def test_set(self):
-        self.context.eval("x = 'overriden'")
-        self.context.set("x", 42)
-        self.context.set("y", "foo")
-        self.assertTrue(self.context.eval("x == 42"))
-        self.assertTrue(self.context.eval("y == 'foo'"))
+        self.context.eval("a = 'overriden'")
+        self.context.set("a", 42)
+        self.assertTrue(self.context.eval("a == 42"))
+        self.context.set("b", "foo")
+        self.assertTrue(self.context.eval("b == 'foo'"))
+        self.context.set("c", [1, 2.0, None, True, 'test'])
+        self.assertTrue(self.context.eval("Array.isArray(c)"))
+        self.assertTrue(self.context.eval("c[0] === 1"))
+        self.assertTrue(self.context.eval("c[1] === 2.0"))
+        self.assertTrue(self.context.eval("c[2] === null"))
+        self.assertTrue(self.context.eval("c[3] === true"))
+        self.assertTrue(self.context.eval("c[4] === 'test'"))
 
     def test_module(self):
         self.context.module("""
@@ -294,13 +305,23 @@ class CallIntoPython(unittest.TestCase):
     def test_conversion_failure_does_not_raise_system_error(self):
         # https://github.com/PetterS/quickjs/issues/38
 
-        def test_list():
-            return [1, 2, 3]
+        def test_tuple():
+            return (1, 2, 3)
 
-        self.context.add_callable("test_list", test_list)
+        self.context.add_callable("test_tuple", test_tuple)
         with self.assertRaises(quickjs.JSException):
             # With incorrect error handling, this (safely) made Python raise a SystemError
             # instead of a JS exception.
+            self.context.eval("test_tuple()")
+
+    def test_circular_reference_does_not_raise_system_error(self):
+        def test_list():
+            x = [1, 2, 3]
+            x.append(x)
+            return x
+
+        self.context.add_callable("test_list", test_list)
+        with self.assertRaises(quickjs.JSException):
             self.context.eval("test_list()")
 
 

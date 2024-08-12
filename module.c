@@ -176,6 +176,22 @@ static int python_to_quickjs_possible(RuntimeData *runtime_data, PyObject *item)
 		return 1;
 	} else if (PyUnicode_Check(item)) {
 		return 1;
+	} else if (PyList_Check(item)) {
+		int retval = 1;
+		int recursion = Py_ReprEnter(item);
+		if (recursion) {
+			Py_ReprLeave(item);
+			return 0;
+		}
+		for (int i = 0; i < PyList_Size(item); i++) {
+			PyObject *el = PyList_GetItem(item, i);
+			if (python_to_quickjs_possible(runtime_data, el) == 0) {
+				retval = 0;
+				break;
+			}
+		}
+		Py_ReprLeave(item);
+		return retval;
 	} else if (PyObject_IsInstance(item, (PyObject *)&Object)) {
 		ObjectData *object = (ObjectData *)item;
 		if (object->runtime_data != runtime_data) {
@@ -215,6 +231,17 @@ static JSValueConst python_to_quickjs(RuntimeData *runtime_data, PyObject *item)
 		return JS_NULL;
 	} else if (PyUnicode_Check(item)) {
 		return JS_NewString(runtime_data->context, PyUnicode_AsUTF8(item));
+	} else if (PyList_Check(item)) {
+		JSValueConst list = JS_NewArray(runtime_data->context);
+		JSValueConst push = JS_GetPropertyStr(runtime_data->context, list, "push");
+		for (int i = 0; i < PyList_Size(item); i++) {
+			PyObject *el = PyList_GetItem(item, i);
+			JSValueConst el_obj = python_to_quickjs(runtime_data, el);
+			JS_Call(runtime_data->context, push, list, 1, &el_obj);
+			JS_FreeValue(runtime_data->context, el_obj);
+		}
+		JS_FreeValue(runtime_data->context, push);
+		return list;
 	} else if (PyObject_IsInstance(item, (PyObject *)&Object)) {
 		return JS_DupValue(runtime_data->context, ((ObjectData *)item)->object);
 	} else {
@@ -327,6 +354,16 @@ static PyObject *quickjs_to_python(RuntimeData *runtime_data, JSValue value) {
 		const char *cstring = JS_ToCString(context, value);
 		return_value = Py_BuildValue("s", cstring);
 		JS_FreeCString(context, cstring);
+	} else if (JS_IsArray(context, value)) {
+		JSValue len_val = JS_GetPropertyStr(context, value, "length");
+		int len = JS_VALUE_GET_INT(len_val);
+		JS_FreeValue(context, len_val);
+		return_value = PyList_New(len);
+		for (int i = 0; i < len; i++) {
+			JSValue item_val = JS_GetPropertyUint32(context, value, i);
+			PyObject *item = quickjs_to_python(runtime_data, item_val);
+			PyList_SetItem(return_value, i, item);
+		}
 	} else if (tag == JS_TAG_OBJECT || tag == JS_TAG_MODULE || tag == JS_TAG_SYMBOL) {
 		// This is a Javascript object or function. We wrap it in a _quickjs.Object.
 		return_value = PyObject_CallObject((PyObject *)&Object, NULL);
