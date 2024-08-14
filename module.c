@@ -477,11 +477,37 @@ static JSValue js_python_function_call(JSContext *ctx, JSValueConst func_obj,
 
 	PyObject *result = PyObject_CallObject(node->obj, args);
 	Py_DECREF(args);
-	if (!result) {
-		end_call_python(runtime_data);
-		return JS_ThrowInternalError(ctx, "Python call failed.");
-	}
 	JSValue js_result = JS_NULL;
+	if (!result) {
+		PyObject *type, *val, *tb;
+		PyErr_Fetch(&type, &val, &tb);
+		PyErr_NormalizeException(&type, &val, &tb);
+		if (type) {
+			PyObject *type_str = PyObject_Str(type);
+			PyObject *val_str = val ? PyObject_Str(val) : PyUnicode_New(0, 127);
+			PyObject *tb_str;
+			if (tb) {
+
+				PyObject *mod = PyImport_ImportModule("traceback");
+				PyObject *tb_list = PyObject_CallMethod(mod, "format_exception", "OOO", type, val, tb);
+				tb_str = PyObject_Str(tb_list);
+				Py_DECREF(mod);
+				Py_DECREF(tb_list);
+			} else {
+				tb_str = PyUnicode_New(0, 127);
+			}
+
+			js_result = JS_ThrowInternalError(ctx, "Python call failed: %s: %s\n%s", PyUnicode_AsUTF8(type_str), PyUnicode_AsUTF8(val_str), PyUnicode_AsUTF8(tb_str));
+			Py_DECREF(type_str);
+			Py_DECREF(val_str);
+			Py_DECREF(tb_str);
+		} else {
+			js_result = JS_ThrowInternalError(ctx, "Python call failed.");
+		}
+		PyErr_Restore(type, val, tb);
+		end_call_python(runtime_data);
+		return js_result;
+	}
 	if (python_to_quickjs_possible(runtime_data, result)) {
 		js_result = python_to_quickjs(runtime_data, result);
 	} else {
