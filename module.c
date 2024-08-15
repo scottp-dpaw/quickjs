@@ -294,6 +294,23 @@ static PyObject *object_call(ObjectData *self, PyObject *args, PyObject *kwds) {
 	return quickjs_to_python(self->runtime_data, value);
 }
 
+static int quickjs_is_primitive_wrapper_class(JSContext *context, JSValue value) {
+	int result = 0;
+	JSValue global = JS_GetGlobalObject(context);
+	JSValue number_class = JS_GetPropertyStr(context, global, "Number");
+	JSValue string_class = JS_GetPropertyStr(context, global, "String");
+	JSValue boolean_class = JS_GetPropertyStr(context, global, "Boolean");
+	result |= JS_IsInstanceOf(context, value, number_class) > 0 ? 1 : 0;
+	result |= JS_IsInstanceOf(context, value, string_class) > 0 ? 1 : 0;
+	result |= JS_IsInstanceOf(context, value, boolean_class) > 0 ? 1 : 0;
+
+	JS_FreeValue(context, boolean_class);
+	JS_FreeValue(context, string_class);
+	JS_FreeValue(context, number_class);
+	JS_FreeValue(context, global);
+	return result;
+}
+
 // Converts the current Javascript exception to a Python exception via a C string.
 static void quickjs_exception_to_python(JSContext *context) {
 	JSValue exception = JS_GetException(context);
@@ -365,15 +382,23 @@ static PyObject *quickjs_to_python(RuntimeData *runtime_data, JSValue value) {
 			PyList_SetItem(return_value, i, item);
 		}
 	} else if (tag == JS_TAG_OBJECT || tag == JS_TAG_MODULE || tag == JS_TAG_SYMBOL) {
-		// This is a Javascript object or function. We wrap it in a _quickjs.Object.
-		return_value = PyObject_CallObject((PyObject *)&Object, NULL);
-		ObjectData *object = (ObjectData *)return_value;
-		// This is important. Otherwise, the context may be deallocated before the object, which
-		// will result in a segfault with high probability.
-		Py_INCREF(runtime_data);
-		object->runtime_data = runtime_data;
-		PyObject_GC_Track(object);
-		object->object = JS_DupValue(context, value);
+		// Provide conversion for primitive wrappers
+		if (quickjs_is_primitive_wrapper_class(context, value)) {
+			JSValue valueof = JS_GetPropertyStr(context, value, "valueOf");
+			return_value = quickjs_to_python(runtime_data, JS_Call(context, valueof, value, 0, NULL));
+			JS_FreeValue(context, valueof);
+		} else {
+
+			// This is a Javascript object or function. We wrap it in a _quickjs.Object.
+			return_value = PyObject_CallObject((PyObject *)&Object, NULL);
+			ObjectData *object = (ObjectData *)return_value;
+			// This is important. Otherwise, the context may be deallocated before the object, which
+			// will result in a segfault with high probability.
+			Py_INCREF(runtime_data);
+			object->runtime_data = runtime_data;
+			PyObject_GC_Track(object);
+			object->object = JS_DupValue(context, value);
+		}
 	} else {
 		PyErr_Format(PyExc_TypeError, "Unknown quickjs tag: %d", tag);
 	}
